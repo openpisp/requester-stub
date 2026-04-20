@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}History — PSP Terminal{% endblock %}
+{% block nav_history %}active{% endblock %}
+
+{% block content %}
+
+<div class="card">
+  <div class="card-header">
+    <h1>Payment History</h1>
+    <span class="subtitle">All requests created in this session</span>
+  </div>
+
+  {% if requests %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Reference</th>
+        <th>Amount</th>
+        <th>Status</th>
+        <th>Payment ID</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in requests | reverse %}
+      <tr>
+        <td>
+          <div style="font-weight:600;">{{ r.reference }}</div>
+          {% if r.description %}<div class="text-muted" style="font-size:12px;">{{ r.description }}</div>{% endif %}
+        </td>
+        <td style="font-weight:700;">{{ r.amount.display if r.amount else "—" }}</td>
+        <td>
+          {% set s = r.status %}
+          {% if s == "SETTLED" %}
+            <span class="badge badge-success">SETTLED</span>
+          {% elif s == "FAILED" %}
+            <span class="badge badge-danger">FAILED</span>
+          {% elif s == "EXPIRED" %}
+            <span class="badge badge-warn">EXPIRED</span>
+          {% elif s == "CANCELLED" %}
+            <span class="badge badge-neutral">CANCELLED</span>
+          {% elif s == "DISPATCHED" %}
+            <span class="badge badge-blue">DISPATCHED</span>
+          {% elif s == "CONSENT_CONFIRMED" %}
+            <span class="badge badge-blue">CONSENT_CONFIRMED</span>
+          {% else %}
+            <span class="badge badge-neutral">{{ s or "—" }}</span>
+          {% endif %}
+        </td>
+        <td><span class="mono">{{ r.payment_request_id[:18] }}…</span></td>
+        <td>
+          <a
+            href="/ui/payment/{{ r.payment_request_id }}"
+            class="btn btn-outline btn-sm"
+          >View</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% else %}
+  <div class="text-center" style="padding: 40px 0; color: var(--muted);">
+    <div style="font-size:48px; margin-bottom:12px;">🏪</div>
+    <p>No payments yet this session.</p>
+    <a href="/ui/" class="btn btn-primary mt-4" style="display:inline-block;">
+      Create First Payment
+    </a>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

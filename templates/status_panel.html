@@ -1,0 +1,67 @@
+<!-- Status panel partial — polled every 2s, replaces #status-panel (or itself) -->
+{% if status in ("SETTLED", "FAILED", "EXPIRED", "CANCELLED") %}
+<!-- Terminal state reached — stop polling, show final result -->
+<div id="status-panel" class="card text-center">
+  {% if status == "SETTLED" %}
+    <div class="status-icon">✅</div>
+    <h2 style="margin-top:12px; color: var(--success);">Payment Received</h2>
+    <p class="subtitle mt-2">The payment settled successfully.</p>
+    {% if pr.settlement_id %}
+    <div class="detail-row mt-4">
+      <span class="label">Settlement ID</span>
+      <span class="val mono" style="font-size:11px;">{{ pr.settlement_id }}</span>
+    </div>
+    {% endif %}
+    <div class="alert alert-success mt-4">
+      ✔ Funds are on their way.
+    </div>
+  {% elif status == "CANCELLED" %}
+    <div class="status-icon">🚫</div>
+    <h2 style="margin-top:12px;">Cancelled</h2>
+    <p class="subtitle mt-2">Payment request was cancelled.</p>
+  {% elif status == "EXPIRED" %}
+    <div class="status-icon">⏰</div>
+    <h2 style="margin-top:12px;">Expired</h2>
+    <p class="subtitle mt-2">The payment request timed out.</p>
+  {% else %}
+    <div class="status-icon">❌</div>
+    <h2 style="margin-top:12px; color: var(--danger);">Payment Failed</h2>
+    <p class="subtitle mt-2">{{ pr.failure_reason or "The payment could not be completed." }}</p>
+  {% endif %}
+
+  <a href="/ui/" class="btn btn-primary mt-4 btn-block">New Payment</a>
+</div>
+
+{% elif status == "CONSENT_CONFIRMED" or status == "DISPATCHED" %}
+<!-- Payment in progress -->
+<div
+  id="status-panel"
+  class="card text-center"
+  hx-get="/ui/payment/{{ pr.payment_request_id }}/status"
+  hx-trigger="every 2s"
+  hx-swap="outerHTML"
+>
+  <div class="status-icon status-pulse">🏦</div>
+  <h2 style="margin-top:12px;">Processing…</h2>
+  <p class="subtitle mt-2">
+    {% if status == "CONSENT_CONFIRMED" %}Payer approved — instructing bank…
+    {% else %}Bank transfer in progress…{% endif %}
+  </p>
+  <div class="badge badge-blue mt-4">{{ status }}</div>
+</div>
+
+{% else %}
+<!-- Still PENDING — keep polling -->
+<div
+  id="status-panel"
+  class="card text-center"
+  hx-get="/ui/payment/{{ pr.payment_request_id }}/status"
+  hx-trigger="every 2s"
+  hx-swap="outerHTML"
+>
+  <div class="status-icon status-pulse">⏳</div>
+  <h3 style="margin-top:12px;">Waiting for payer…</h3>
+  <p class="subtitle mt-2">Status updates automatically</p>
+  <div class="badge badge-neutral mt-4">{{ status }}</div>
+</div>
+{% endif %}

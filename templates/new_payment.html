@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}New Payment — PSP Terminal{% endblock %}
+{% block nav_new %}active{% endblock %}
+
+{% block content %}
+
+<div class="card">
+  <div class="card-header">
+    <h1>New Payment Request</h1>
+  </div>
+
+  <form
+    hx-post="/ui/payment"
+    hx-target="#terminal-area"
+    hx-swap="innerHTML"
+  >
+    <div class="form-grid">
+      <div class="input-group full">
+        <label for="reference">Reference <span style="color:var(--danger);">*</span></label>
+        <input id="reference" name="reference" type="text" placeholder="e.g. Table 4 / Order #1234" required />
+      </div>
+
+      <div class="input-group">
+        <label for="amount">Amount (£) <span style="color:var(--danger);">*</span></label>
+        <div class="input-prefix">
+          <span>£</span>
+          <input
+            id="amount"
+            name="amount_pounds"
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+            required
+          />
+        </div>
+      </div>
+
+      <div class="input-group">
+        <label for="expires">Expires in (seconds)</label>
+        <input id="expires" name="expires_in_seconds" type="number" min="30" max="3600" value="300" />
+      </div>
+
+      <div class="input-group full">
+        <label for="description">Description (optional)</label>
+        <input id="description" name="description" type="text" placeholder="e.g. Coffee and cake" />
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <button type="submit" class="btn btn-primary btn-block">
+        Create Payment Request →
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- Terminal display — QR code + status polling loads here -->
+<div id="terminal-area">
+  {% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+</div>
+
+{% endblock %}

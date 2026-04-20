@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Payment — PSP Terminal{% endblock %}
+{% block nav_history %}active{% endblock %}
+
+{% block content %}
+
+<div class="card">
+  <div class="card-header" style="justify-content:space-between; align-items:center;">
+    <div>
+      <h1>Payment Detail</h1>
+      <div class="mono" style="font-size:11px; color:var(--muted);">{{ pr.payment_request_id }}</div>
+    </div>
+    <a href="/ui/history" class="btn btn-ghost btn-sm">← History</a>
+  </div>
+
+  <table class="table" style="width:auto; min-width:360px;">
+    <tbody>
+      <tr>
+        <td style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; padding-right:32px;">Status</td>
+        <td>
+          {% set s = pr.status %}
+          {% if s == "SETTLED" %}
+            <span class="badge badge-success">SETTLED</span>
+          {% elif s == "FAILED" %}
+            <span class="badge badge-danger">FAILED</span>
+          {% elif s == "EXPIRED" %}
+            <span class="badge badge-warn">EXPIRED</span>
+          {% elif s == "CANCELLED" %}
+            <span class="badge badge-neutral">CANCELLED</span>
+          {% elif s == "DISPATCHED" %}
+            <span class="badge badge-blue">DISPATCHED</span>
+          {% elif s == "CONSENT_CONFIRMED" %}
+            <span class="badge badge-blue">CONSENT_CONFIRMED</span>
+          {% else %}
+            <span class="badge badge-neutral">{{ s or "—" }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.4px;">Amount</td>
+        <td style="font-weight:700; font-size:20px;">{{ pr.amount.display if pr.amount else "—" }}</td>
+      </tr>
+      <tr>
+        <td style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.4px;">Reference</td>
+        <td>{{ pr.reference or "—" }}</td>
+      </tr>
+      {% if pr.description %}
+      <tr>
+        <td style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.4px;">Description</td>
+        <td>{{ pr.description }}</td>
+      </tr>
+      {% endif %}
+      {% if pr.settlement_id %}
+      <tr>
+        <td style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.4px;">Settlement ID</td>
+        <td class="mono" style="font-size:12px;">{{ pr.settlement_id }}</td>
+      </tr>
+      {% endif %}
+      {% if pr.created_at %}
+      <tr>
+        <td style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.4px;">Created</td>
+        <td class="mono" style="font-size:12px;">{{ pr.created_at }}</td>
+      </tr>
+      {% endif %}
+      {% if pr.expires_at %}
+      <tr>
+        <td style="color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.4px;">Expires</td>
+        <td class="mono" style="font-size:12px;">{{ pr.expires_at }}</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

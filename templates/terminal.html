@@ -1,0 +1,129 @@
+<!-- Terminal display partial — loaded into #terminal-area after payment creation -->
+<!-- Shows QR code image + auto-polls for status updates via HTMX -->
+
+<div class="grid-2">
+
+  <!-- Left: QR code display -->
+  <div class="card text-center">
+    <h2>Awaiting Payment</h2>
+    <p class="subtitle" style="margin-bottom:20px;">Ask the customer to scan the QR code</p>
+
+    <!-- QR code image — rendered by qrcodejs after load -->
+    <div
+      id="qr-wrapper-{{ pr.payment_request_id }}"
+      data-payload="{{ qr_payload }}"
+      style="display:flex; flex-direction:column; align-items:center; gap:12px; padding:16px 0;"
+    >
+      <!-- qrcodejs injects a <canvas> (or <img> as fallback) into this div -->
+      <div id="qr-canvas-{{ pr.payment_request_id }}" style="line-height:0; border-radius:8px; overflow:hidden;"></div>
+      <p class="qr-copy-hint" style="font-size:12px; color:var(--muted);">
+        Scan to pay &nbsp;·&nbsp;
+        <a
+          href="#"
+          style="color:var(--brand);"
+          onclick="event.preventDefault(); copyText(document.getElementById('qr-wrapper-{{ pr.payment_request_id }}').dataset.payload).then(()=>{ this.textContent='✅ Copied!'; setTimeout(()=>this.textContent='Copy link',1500); })"
+        >Copy link</a>
+      </p>
+    </div>
+
+    <!-- Payment details -->
+    <div style="margin-top:4px; text-align:left;">
+      <div class="detail-row">
+        <span class="label">Amount</span>
+        <span class="val" style="font-size:24px; font-weight:800; color:var(--brand);">{{ pr.amount.display }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="label">Reference</span>
+        <span class="val">{{ pr.reference }}</span>
+      </div>
+      {% if pr.description %}
+      <div class="detail-row">
+        <span class="label">Description</span>
+        <span class="val">{{ pr.description }}</span>
+      </div>
+      {% endif %}
+      <div class="detail-row">
+        <span class="label">Payment ID</span>
+        <span class="val mono" style="font-size:11px;">{{ pr.payment_request_id }}</span>
+      </div>
+      <div class="detail-row">
+        <span class="label">Status</span>
+        <span class="val"><span class="badge badge-blue">PENDING</span></span>
+      </div>
+    </div>
+
+    <!-- URI string (selectable, for copy-paste into payer app) -->
+    <div style="margin-top:16px; background:var(--bg); border-radius:8px; padding:10px 12px; text-align:left;">
+      <p class="label" style="margin-bottom:4px;">Payment URI</p>
+      <p class="mono" style="font-size:11px; word-break:break-all; user-select:all; color:var(--text);">{{ qr_payload }}</p>
+    </div>
+
+    <!-- Cancel button -->
+    <div class="mt-4">
+      <button
+        class="btn btn-danger btn-block"
+        hx-delete="/ui/payment/{{ pr.payment_request_id }}"
+        hx-target="#terminal-area"
+        hx-swap="innerHTML"
+        hx-confirm="Cancel this payment request?"
+      >
+        ✕ Cancel Request
+      </button>
+    </div>
+  </div>
+
+  <!-- Right: live status polling -->
+  <div
+    id="status-panel"
+    hx-get="/ui/payment/{{ pr.payment_request_id }}/status"
+    hx-trigger="load, every 2s"
+    hx-swap="outerHTML"
+  >
+    <div class="card text-center">
+      <div class="status-icon status-pulse">⏳</div>
+      <h3 style="margin-top:12px;">Waiting for payer…</h3>
+      <p class="subtitle mt-2">Status updates automatically</p>
+    </div>
+  </div>
+
+</div>
+
+<!--
+  QR code render script — runs after HTMX swaps this partial into #terminal-area.
+
+  Why an inline <script> works here:
+    HTMX evaluates <script> tags inside swapped HTML (it re-appends them to <head>
+    after each swap), so this runs reliably every time a new payment is created.
+    A global window onload would NOT work here because the partial arrives after
+    the initial page load event has already fired.
+
+  IDs are scoped to payment_request_id so the page is safe if multiple partials
+  were ever rendered simultaneously (e.g. developer has two tabs open).
+
+  QR code image choice: QRCode.CorrectLevel.M = ~15% error correction — a good
+  balance between data density and scan reliability for the URI length we use.
+  The full psp://pay?... URI fits comfortably in a version 10-12 QR at this level.
+
+  Future — iPhone demo app:
+    QR scanning will be added to the native iOS app when built. The copy-paste
+    flow in the web payer app (/ui/ on port 8004) is intentionally kept for now
+    as it works well for testing without requiring camera access.
+-->
+<script>
+(function() {
+  var wrapper = document.getElementById("qr-wrapper-{{ pr.payment_request_id }}");
+  var target  = document.getElementById("qr-canvas-{{ pr.payment_request_id }}");
+  var payload = wrapper ? wrapper.dataset.payload : "";
+
+  if (!payload || !target || typeof QRCode === "undefined") return;
+
+  new QRCode(target, {
+    text:           payload,
+    width:          220,
+    height:         220,
+    colorDark:      "#111827",
+    colorLight:     "#ffffff",
+    correctLevel:   QRCode.CorrectLevel.M   // ~15% error correction
+  });
+})();
+</script>

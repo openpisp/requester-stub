@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}Static QR Tokens — PSP Terminal{% endblock %}
+{% block nav_qr %}active{% endblock %}
+
+{% block content %}
+
+{% if msg %}
+<div class="alert alert-success">{{ msg }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<!-- Register new token -->
+<div class="card">
+  <div class="card-header">
+    <h1>Register Static QR Token</h1>
+  </div>
+  <p class="subtitle" style="margin-bottom:20px;">
+    <strong>Armed (UC2):</strong> re-arm before each transaction — the printed QR never changes.<br>
+    <strong>Template (UC3):</strong> fixed amount printed on the QR; each scan auto-creates a fresh payment.
+  </p>
+
+  <form method="post" action="/ui/qr-tokens">
+    <div class="form-grid">
+      <div class="input-group full">
+        <label for="display_name">Display name <span style="color:var(--danger);">*</span></label>
+        <input id="display_name" name="display_name" type="text" placeholder="e.g. Acme Counter #1" required />
+      </div>
+
+      <div class="input-group full">
+        <label for="mode">Mode <span style="color:var(--danger);">*</span></label>
+        <select id="mode" name="mode" onchange="toggleTemplateFields(this.value)">
+          <option value="armed">Armed (UC2) — re-arm before each use</option>
+          <option value="template">Template (UC3) — fixed amount, auto-instantiate</option>
+        </select>
+      </div>
+
+      <!-- Template-mode fields (hidden by default) -->
+      <div id="template-fields" style="display:none; grid-column:1/-1;">
+        <div class="form-grid">
+          <div class="input-group">
+            <label for="t_amount">Amount (£) <span style="color:var(--danger);">*</span></label>
+            <div class="input-prefix">
+              <span>£</span>
+              <input id="t_amount" name="amount_pounds" type="number" min="0.01" step="0.01" placeholder="0.00" />
+            </div>
+          </div>
+          <div class="input-group">
+            <label for="t_ref">Reference <span style="color:var(--danger);">*</span></label>
+            <input id="t_ref" name="reference" type="text" placeholder="e.g. DONATION" />
+          </div>
+          <div class="input-group">
+            <label for="t_expires">Expires in (seconds)</label>
+            <input id="t_expires" name="expires_in_seconds" type="number" min="30" max="3600" value="300" />
+          </div>
+          <div class="input-group">
+            <label for="t_desc">Description (optional)</label>
+            <input id="t_desc" name="description" type="text" placeholder="e.g. Charity donation" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <button type="submit" class="btn btn-primary btn-block">Register Token →</button>
+    </div>
+  </form>
+</div>
+
+<!-- Token list -->
+<div class="card" style="overflow-x:auto;">
+  <div class="card-header">
+    <h2>Active Tokens</h2>
+    <span class="subtitle">{{ tokens | length }} token(s)</span>
+  </div>
+
+  {% if tokens %}
+  <table class="table" style="min-width:680px;">
+    <colgroup>
+      <col style="width:90px;">   <!-- Token ID -->
+      <col style="width:140px;">  <!-- Display name -->
+      <col style="width:110px;">  <!-- Mode/status -->
+      <col>                        <!-- Payment details — takes remaining space -->
+      <col style="width:90px;">   <!-- Copy QR -->
+      <col style="width:140px;">  <!-- Actions -->
+    </colgroup>
+    <thead>
+      <tr>
+        <th>Token ID</th>
+        <th>Name</th>
+        <th>Mode</th>
+        <th>Payment details</th>
+        <th></th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tokens %}
+      <tr>
+        <td class="mono">{{ t.token_id[:8] }}…</td>
+        <td>{{ t.display_name or '' }}</td>
+
+        <!-- Mode + armed/revoked status -->
+        <td>
+          {% if t.mode == "template" %}
+            <span class="badge badge-blue">template</span>
+          {% elif not t.get('armed_pr_id') or t.get('armed_pr_status') in ('SETTLED','FAILED','EXPIRED','CANCELLED') %}
+            <span class="badge badge-neutral">not armed</span>
+          {% elif t.get('armed_pr_status') == 'PENDING' %}
+            <span class="badge badge-success">armed ✓</span>
+          {% else %}
+            <span class="badge badge-neutral">armed</span>
+          {% endif %}
+          {% if t.status != "active" %}
+          <br><span class="badge badge-danger" style="margin-top:4px;">revoked</span>
+          {% endif %}
+        </td>
+
+        <!-- Payment details -->
+        <td style="font-size:13px; line-height:1.7;">
+          {% if t.mode == "template" and t.get('template') %}
+            {% set tmpl = t.template %}
+            {% if tmpl.get('amount') %}<strong>{{ tmpl.amount.display }}</strong> {% endif %}
+            {% set s = '' %}
+            {% if tmpl.get('reference') %}<span class="text-muted">· {{ tmpl.reference }}</span>{% endif %}
+            {% if tmpl.get('description') %}<br><span class="text-muted" style="font-size:11px;">{{ tmpl.description }}</span>{% endif %}
+          {% elif t.mode == "armed" %}
+            {% set s = t.get('armed_pr_status','') %}
+            {% if t.get('armed_pr_amount') %}
+              <strong>{{ t.armed_pr_amount.display }}</strong>
+              {% if s == 'SETTLED' %}<span class="badge badge-success" style="font-size:10px;vertical-align:middle;">SETTLED</span>
+              {% elif s == 'PENDING' %}<span class="badge badge-neutral" style="font-size:10px;vertical-align:middle;">PENDING</span>
+              {% elif s in ('FAILED','CANCELLED','EXPIRED') %}<span class="badge badge-danger" style="font-size:10px;vertical-align:middle;">{{ s }}</span>{% endif %}
+            {% endif %}
+            {% if t.get('armed_pr_reference') %}<br><span class="text-muted">{{ t.armed_pr_reference }}</span>{% endif %}
+            {% if t.get('armed_pr_description') %}<br><span class="text-muted" style="font-size:11px;">{{ t.armed_pr_description }}</span>{% endif %}
+            {% if not t.get('armed_pr_id') %}<span class="text-muted">—</span>{% endif %}
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+
+        <!-- Copy QR button — payload in data attr to avoid inline-JS escaping issues -->
+        <td>
+          <button class="btn btn-ghost btn-sm" data-qr="{{ t.qr_payload }}"
+            onclick="var p=this.dataset.qr; copyText(p).then(()=>{ this.textContent='Copied!'; setTimeout(()=>this.textContent='Copy QR',1500); }).catch(()=>{ this.textContent='Error'; setTimeout(()=>this.textContent='Copy QR',1500); })">
+            Copy QR
+          </button>
+        </td>
+
+        <!-- Actions: Re-arm + Revoke, each in their own wrapper div -->
+        <td>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            {% if t.mode == "armed" and t.status == "active" %}
+            <div style="position:relative;">
+              <button class="btn btn-primary btn-sm"
+                onclick="toggleRearm('{{ t.token_id }}')">Re-arm</button>
+              <div id="rearm-{{ t.token_id }}" style="
+                display:none; position:absolute; right:0; top:100%; z-index:200;
+                background:var(--surface); border:1px solid var(--border);
+                border-radius:var(--radius); box-shadow:var(--shadow);
+                padding:16px; min-width:260px; margin-top:4px;">
+                <form method="post" action="/ui/qr-tokens/{{ t.token_id }}/rearm">
+                  <div class="input-group" style="margin-bottom:8px;">
+                    <label>Amount (£)</label>
+                    <div class="input-prefix">
+                      <span>£</span>
+                      <input name="amount_pounds" type="number" min="0.01" step="0.01" placeholder="0.00" required />
+                    </div>
+                  </div>
+                  <div class="input-group" style="margin-bottom:8px;">
+                    <label>Reference</label>
+                    <input name="reference" type="text" placeholder="e.g. TABLE-5" required />
+                  </div>
+                  <div class="input-group" style="margin-bottom:8px;">
+                    <label>Description (optional)</label>
+                    <input name="description" type="text" />
+                  </div>
+                  <button type="submit" class="btn btn-primary btn-block btn-sm">Arm →</button>
+                </form>
+              </div>
+            </div>
+            {% endif %}
+
+            {% if t.status == "active" %}
+            <button class="btn btn-danger btn-sm"
+              onclick="if(confirm('Revoke this token? The QR code will stop working.')) htmx.ajax('DELETE','/ui/qr-tokens/{{ t.token_id }}',{target:'body',swap:'outerHTML'});">
+              Revoke
+            </button>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="alert alert-info">No tokens registered yet. Use the form above to create one.</div>
+  {% endif %}
+</div>
+
+<script>
+function toggleTemplateFields(mode) {
+  document.getElementById('template-fields').style.display = mode === 'template' ? '' : 'none';
+}
+
+function toggleRearm(tokenId) {
+  const el = document.getElementById('rearm-' + tokenId);
+  const isOpen = el.style.display !== 'none';
+  // Close all other open dropdowns first
+  document.querySelectorAll('[id^="rearm-"]').forEach(d => d.style.display = 'none');
+  el.style.display = isOpen ? 'none' : 'block';
+}
+
+// Close rearm dropdowns when clicking outside
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('[id^="rearm-"]') && !e.target.matches('.btn')) {
+    document.querySelectorAll('[id^="rearm-"]').forEach(d => d.style.display = 'none');
+  }
+});
+</script>
+
+{% endblock %}

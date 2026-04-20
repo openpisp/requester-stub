@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}PSP Terminal{% endblock %}</title>
+  <!--
+    HTMX (https://htmx.org) — drives all dynamic UI without writing JavaScript.
+    Attributes used throughout:
+      hx-get / hx-post / hx-delete   HTTP method + URL to call
+      hx-target                       CSS selector of element to update
+      hx-swap                         How to update: innerHTML, outerHTML, etc.
+      hx-trigger                      What fires the request: "load", "every 2s", click, etc.
+      hx-indicator                    Element that gets the .htmx-request class while loading
+      hx-confirm                      Native confirm() dialog before destructive actions
+
+    Important: HTMX *does* execute <script> tags inside swapped-in HTML (unlike
+    setting innerHTML directly). This is relied upon by terminal.html to run the
+    QR code render script after the payment partial is swapped in.
+  -->
+  <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
+
+  <!--
+    qrcodejs (https://github.com/davidshimjs/qrcodejs) — browser-native QR generator.
+    Exposes window.QRCode as a constructor: new QRCode(domElement, options).
+    Chosen over the npm "qrcode" package because that package targets Node/CJS and
+    does not expose a browser global without a bundler.
+    Usage: new QRCode(el, { text, width, height, colorDark, colorLight, correctLevel })
+    Injects both a <canvas> and an <img> fallback into the target element.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script>
+    // Copy text to clipboard.  navigator.clipboard requires a secure context
+    // (HTTPS or localhost); fall back to execCommand for plain-HTTP Traefik URLs.
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text);
+      }
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0;';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+      return Promise.resolve();
+    }
+  </script>
+  <style>
+    /* -----------------------------------------------------------------------
+       Design system — terminal / point-of-sale aesthetic
+    ----------------------------------------------------------------------- */
+    :root {
+      --brand:       #1a56db;
+      --brand-dark:  #1040a8;
+      --success:     #057a55;
+      --danger:      #c81e1e;
+      --warn:        #d97706;
+      --bg:          #f9fafb;
+      --surface:     #ffffff;
+      --border:      #e5e7eb;
+      --text:        #111827;
+      --muted:       #6b7280;
+      --radius:      12px;
+      --shadow:      0 1px 8px rgba(0,0,0,.08);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* Top nav bar */
+    .topbar {
+      background: var(--brand);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      height: 56px;
+    }
+    .topbar .logo { font-size: 18px; font-weight: 700; }
+    .topbar .merchant { font-size: 14px; opacity: .85; }
+    .topbar nav a {
+      color: rgba(255,255,255,.85);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 6px;
+      transition: background .15s;
+    }
+    .topbar nav a:hover, .topbar nav a.active {
+      background: rgba(255,255,255,.15);
+      color: #fff;
+    }
+
+    /* Page layout */
+    .page {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 32px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 28px 24px;
+    }
+    .card-header {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    /* Two-column layout on wide screens */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    @media (max-width: 640px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+
+    /* Typography */
+    h1 { font-size: 24px; font-weight: 700; }
+    h2 { font-size: 18px; font-weight: 700; }
+    h3 { font-size: 15px; font-weight: 600; }
+    .subtitle { color: var(--muted); font-size: 14px; margin-top: 4px; }
+    .amount-big { font-size: 48px; font-weight: 800; color: var(--brand); line-height: 1; }
+    .label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+
+    /* Form */
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 520px) { .form-grid { grid-template-columns: 1fr; } }
+    .form-grid .full { grid-column: 1 / -1; }
+
+    .input-group { display: flex; flex-direction: column; gap: 5px; }
+    .input-group label { font-size: 13px; font-weight: 600; color: var(--muted); }
+    .input-group input, .input-group textarea, .input-group select {
+      padding: 12px 14px;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      font-size: 15px;
+      color: var(--text);
+      background: var(--surface);
+      width: 100%;
+      outline: none;
+      transition: border-color .15s;
+      font-family: inherit;
+    }
+    .input-group input:focus, .input-group textarea:focus, .input-group select:focus {
+      border-color: var(--brand);
+    }
+    .input-prefix {
+      position: relative;
+    }
+    .input-prefix span {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 700;
+      pointer-events: none;
+    }
+    .input-prefix input { padding-left: 28px; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      color: #fff;
+      transition: opacity .15s, transform .1s;
+      white-space: nowrap;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn-block { display: flex; width: 100%; }
+    .btn-primary  { background: var(--brand); }
+    .btn-success  { background: var(--success); }
+    .btn-danger   { background: var(--danger); }
+    .btn-outline  { background: transparent; color: var(--brand); border: 2px solid var(--brand); }
+    .btn-ghost    { background: var(--border); color: var(--text); }
+    .btn-sm { padding: 7px 14px; font-size: 13px; border-radius: 6px; }
+
+    /* Status badge */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .badge-success { background: #d1fae5; color: var(--success); }
+    .badge-danger  { background: #fee2e2; color: var(--danger);  }
+    .badge-warn    { background: #fef3c7; color: var(--warn);    }
+    .badge-blue    { background: #dbeafe; color: var(--brand);   }
+    .badge-neutral { background: var(--border); color: var(--muted); }
+
+    /* Detail rows */
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-row .val { font-weight: 600; text-align: right; }
+
+    /* QR placeholder */
+    .qr-block {
+      background: var(--bg);
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 28px 16px;
+      gap: 10px;
+    }
+    .qr-icon { font-size: 64px; }
+    .qr-id {
+      font-family: "SF Mono", Menlo, monospace;
+      font-size: 11px;
+      color: var(--muted);
+      word-break: break-all;
+      text-align: center;
+      max-width: 260px;
+    }
+
+    /* Status screen */
+    .status-icon { font-size: 64px; text-align: center; }
+    .status-pulse {
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+    /* Alert */
+    .alert {
+      padding: 14px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .alert-error { background: #fee2e2; color: var(--danger); }
+    .alert-info  { background: #dbeafe; color: #1e40af; }
+    .alert-success { background: #d1fae5; color: var(--success); }
+
+    /* Table */
+    .table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .table th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      border-bottom: 1px solid var(--border);
+    }
+    .table td {
+      padding: 12px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .table tr:last-child td { border-bottom: none; }
+    .table tr:hover td { background: var(--bg); }
+
+    /* Mono */
+    .mono {
+      font-family: "SF Mono", Menlo, monospace;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* Utilities */
+    .text-center { text-align: center; }
+    .text-muted   { color: var(--muted); }
+    .mt-4  { margin-top: 16px; }
+    .mt-2  { margin-top: 8px; }
+    .gap-8 { gap: 8px; }
+    .flex  { display: flex; }
+    .flex-col { display: flex; flex-direction: column; }
+    .items-center { align-items: center; }
+    .justify-between { justify-content: space-between; }
+  </style>
+</head>
+<body>
+
+<!-- Top navigation -->
+<div class="topbar">
+  <div>
+    <span class="logo">🏪 PSP Terminal</span>
+    <span class="merchant" style="margin-left:16px;">{{ merchant_name }}</span>
+  </div>
+  <nav style="display:flex; gap:4px;">
+    <a href="/ui/" class="{% block nav_new %}{% endblock %}">New Payment</a>
+    <a href="/ui/qr-tokens" class="{% block nav_qr %}{% endblock %}">Static QR</a>
+    <a href="/ui/history" class="{% block nav_history %}{% endblock %}">History</a>
+    <a href="/ui/webhooks" class="{% block nav_webhooks %}{% endblock %}">Webhooks</a>
+  </nav>
+</div>
+
+<!-- Page content -->
+<div class="page">
+  {% block content %}{% endblock %}
+</div>
+
+</body>
+</html>

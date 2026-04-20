@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Webhooks — PSP Terminal{% endblock %}
+{% block nav_webhooks %}active{% endblock %}
+
+{% block content %}
+
+<div class="card">
+  <div class="card-header">
+    <h1>Webhook Events</h1>
+    <span class="subtitle">Payment push notifications received from the PISP (newest first, max 200)</span>
+  </div>
+
+  {% if events %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Event Type</th>
+        <th>Payment ID</th>
+        <th>Reference</th>
+        <th>Amount</th>
+        <th>Received At</th>
+        <th>Signed</th>
+        <th>Settlement ID</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ev in events %}
+      <tr>
+        <td>
+          {% set et = ev.event_type %}
+          {% if et == "payment.settled" %}
+            <span class="badge badge-success">{{ et }}</span>
+          {% elif et == "payment.failed" %}
+            <span class="badge badge-danger">{{ et }}</span>
+          {% elif et == "payment.expired" %}
+            <span class="badge badge-warn">{{ et }}</span>
+          {% elif et == "payment.cancelled" %}
+            <span class="badge badge-neutral">{{ et }}</span>
+          {% else %}
+            <span class="badge badge-blue">{{ et }}</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if ev.payment_request_id %}
+            <span class="mono">{{ ev.payment_request_id[:8] }}…</span>
+          {% else %}—{% endif %}
+        </td>
+        <td style="font-weight:600;">{{ ev.reference or "—" }}</td>
+        <td style="font-weight:700;">
+          {% if ev.amount %}{{ ev.amount.display }}{% else %}—{% endif %}
+        </td>
+        <td>
+          <span class="mono" style="font-size:11px;">
+            {{ ev._received_at[:19].replace("T", " ") if ev._received_at else "—" }}
+          </span>
+        </td>
+        <td>
+          {% if ev._signature %}
+            <span title="{{ ev._signature[:40] }}…" style="color:var(--success); font-weight:700;">✓</span>
+          {% else %}
+            <span style="color:var(--muted);">✗</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if ev.settlement_id %}
+            <span class="mono">{{ ev.settlement_id[:8] }}…</span>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% else %}
+  <div class="text-center" style="padding: 40px 0; color: var(--muted);">
+    <div style="font-size:48px; margin-bottom:12px;">📡</div>
+    <p>No webhook events received yet.</p>
+    <p class="subtitle mt-2">Complete a payment and the PISP will push an event here automatically.</p>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}
