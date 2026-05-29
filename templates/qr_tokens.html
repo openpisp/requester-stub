@@ -143,7 +143,7 @@
 
         <!-- Copy QR button — payload in data attr to avoid inline-JS escaping issues -->
         <td>
-          <button class="btn btn-ghost btn-sm" data-qr="{{ t.qr_payload }}"
+          <button class="btn btn-ghost btn-sm" data-qr="{{ t.uri }}"
             onclick="var p=this.dataset.qr; copyText(p).then(()=>{ this.textContent='Copied!'; setTimeout(()=>this.textContent='Copy QR',1500); }).catch(()=>{ this.textContent='Error'; setTimeout(()=>this.textContent='Copy QR',1500); })">
             Copy QR
           </button>
