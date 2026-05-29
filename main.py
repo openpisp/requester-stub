@@ -156,6 +156,21 @@ def _tpl_ctx(request: Request, **kwargs):
     """Base context injected into every template render."""
     return {"request": request, "merchant_name": REQUESTER_DISPLAY_NAME, **kwargs}
 
+
+def _normalise_pr(pr: dict) -> dict:
+    """Ensure payment record always has an `amount` dict with a `display` field.
+
+    The terminal profile returns `amount_pence` + `currency` on POST/list,
+    but the poll endpoint returns the full `amount` Pydantic model serialised.
+    Normalise to always have both so templates can use `pr.amount.display`.
+    """
+    if "amount_pence" in pr and "amount" not in pr:
+        pr["amount"] = _make_fiat_amount(pr["amount_pence"], pr.get("currency", "GBP"))
+    elif "amount" in pr and isinstance(pr["amount"], dict) and "amount_pence" not in pr:
+        pr["amount_pence"] = pr["amount"].get("value", 0)
+        pr["currency"] = pr["amount"].get("asset_code", "GBP")
+    return pr
+
 # ---------------------------------------------------------------------------
 # In-memory state
 # ---------------------------------------------------------------------------
@@ -188,14 +203,12 @@ async def _startup():
     # is configured.  When terminal auth is active the Bearer token takes
     # precedence and the PISP returns both terminal-specific payments AND
     # org-level payments (QR-token / payment-link) for the same requester.
-    params: dict = {"limit": 200, "requester_uri": REQUESTER_URI}
-
     for attempt in range(1, 4):
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
-                    f"{PISP_URL}/requester/requests",
-                    params=params,
+                    f"{PISP_URL}/requester/terminal/requests",
+                    params={"limit": 200},
                     headers=_pisp_headers(),
                     timeout=10.0,
                 )
@@ -204,7 +217,7 @@ async def _startup():
                 for p in payments:
                     pr_id = p.get("payment_request_id")
                     if pr_id:
-                        active_requests[pr_id] = p
+                        active_requests[pr_id] = _normalise_pr(p)
                 log.info("Restored %d payment request(s) from PISP", len(payments))
                 break
             log.warning("Attempt %d: PISP returned HTTP %s for payment list", attempt, resp.status_code)
@@ -216,23 +229,24 @@ async def _startup():
         log.warning("Could not restore payment history from PISP — starting with empty cache")
 
     # Step 4: restore qr_tokens_cache from the PISP so static tokens survive stub restarts.
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{PISP_URL}/requester/qr-tokens",
-                params={"requester_uri": REQUESTER_URI},
-                headers=_pisp_headers(),
-                timeout=10.0,
-            )
-        if resp.status_code == 200:
-            tokens = resp.json().get("tokens", [])
-            for t in tokens:
-                qr_tokens_cache[t["token_id"]] = t
-            log.info("Restored %d QR token(s) from PISP", len(tokens))
-        else:
-            log.warning("Could not restore QR tokens from PISP (HTTP %s)", resp.status_code)
-    except Exception as exc:
-        log.warning("Could not restore QR tokens from PISP: %s", exc)
+    for _profile in ("armed", "template"):
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{PISP_URL}/requester/{_profile}/tokens",
+                    headers=_pisp_headers(),
+                    timeout=10.0,
+                )
+            if resp.status_code == 200:
+                tokens = resp.json().get("tokens", [])
+                for t in tokens:
+                    t.setdefault("mode", _profile)
+                    qr_tokens_cache[t["token_id"]] = t
+                log.info("Restored %d %s token(s) from PISP", len(tokens), _profile)
+            else:
+                log.warning("Could not restore %s tokens from PISP (HTTP %s)", _profile, resp.status_code)
+        except Exception as exc:
+            log.warning("Could not restore %s tokens from PISP: %s", _profile, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -280,10 +294,9 @@ async def ui_create_payment(
     """
     amount_pence = round(amount_pounds * 100)
     payload = {
-        "mode": "once",
-        "requester_uri": REQUESTER_URI,
+        "amount_pence": amount_pence,
+        "currency": "GBP",
         "display_name": REQUESTER_DISPLAY_NAME,
-        "amount": _make_fiat_amount(amount_pence),
         "reference": reference,
         "description": description or None,
         "expires_in_seconds": expires_in_seconds,
@@ -291,7 +304,7 @@ async def ui_create_payment(
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            f"{PISP_URL}/requester/requests",
+            f"{PISP_URL}/requester/terminal/requests",
             json=payload,
             headers=_pisp_headers(),
             timeout=10.0,
@@ -310,15 +323,11 @@ async def ui_create_payment(
             status_code=502,
         )
 
-    pr = resp.json()
+    pr = _normalise_pr(resp.json())
     active_requests[pr["payment_request_id"]] = pr
     log.info("UI created payment request %s (%s)", pr["payment_request_id"], pr["amount"]["display"])
 
-    # qr_payload comes from the create response only — preserve it separately
-    # so poll updates (which don't include it) don't overwrite it.
-    qr_payload = pr.get("qr_payload", "")
-
-    return templates.TemplateResponse(request, "terminal.html", _tpl_ctx(request, pr=pr, qr_payload=qr_payload))
+    return templates.TemplateResponse(request, "terminal.html", _tpl_ctx(request, pr=pr, qr_payload=pr.get("uri", "")))
 
 
 @app.get(
@@ -334,7 +343,7 @@ async def ui_payment_status(request: Request, payment_request_id: str):
     """
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{PISP_URL}/requester/requests/{payment_request_id}",
+            f"{PISP_URL}/requester/terminal/requests/{payment_request_id}",
             headers=_pisp_headers(),
             timeout=10.0,
         )
@@ -354,11 +363,10 @@ async def ui_payment_status(request: Request, payment_request_id: str):
             status_code=502,
         )
 
-    pr = resp.json()
-    # Merge poll result into cache — preserve qr_payload from the original
-    # create response since the poll endpoint does not return it.
+    pr = _normalise_pr(resp.json())
+    # Preserve uri from the original create response if poll doesn't include it.
     existing = active_requests.get(payment_request_id, {})
-    pr.setdefault("qr_payload", existing.get("qr_payload", ""))
+    pr.setdefault("uri", existing.get("uri", ""))
     active_requests[payment_request_id] = pr
     status = pr.get("status", "PENDING")
 
@@ -379,7 +387,7 @@ async def ui_cancel_payment(request: Request, payment_request_id: str):
     """HTMX: cancel a payment and render the status panel with CANCELLED state."""
     async with httpx.AsyncClient() as client:
         resp = await client.delete(
-            f"{PISP_URL}/requester/requests/{payment_request_id}",
+            f"{PISP_URL}/requester/terminal/requests/{payment_request_id}",
             headers=_pisp_headers(),
             timeout=10.0,
         )
@@ -431,7 +439,7 @@ async def ui_payment_detail(request: Request, payment_request_id: str):
     """Detail view for a specific payment — fetches fresh status from PISP."""
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{PISP_URL}/requester/requests/{payment_request_id}",
+            f"{PISP_URL}/requester/terminal/requests/{payment_request_id}",
             headers=_pisp_headers(),
             timeout=10.0,
         )
@@ -451,10 +459,9 @@ async def ui_payment_detail(request: Request, payment_request_id: str):
             status_code=502,
         )
 
-    pr = resp.json()
-    # Preserve qr_payload from the original create response (poll doesn't return it).
+    pr = _normalise_pr(resp.json())
     existing = active_requests.get(payment_request_id, {})
-    pr.setdefault("qr_payload", existing.get("qr_payload", ""))
+    pr.setdefault("uri", existing.get("uri", ""))
     active_requests[payment_request_id] = pr
     return templates.TemplateResponse(request, "payment_detail.html", _tpl_ctx(request, pr=pr))
 
@@ -480,12 +487,12 @@ async def ui_qr_tokens(request: Request, msg: Optional[str] = None, error: Optio
             if token.get("mode") == "armed" and token.get("armed_pr_id"):
                 try:
                     r = await client.get(
-                        f"{PISP_URL}/requester/requests/{token['armed_pr_id']}",
+                        f"{PISP_URL}/requester/terminal/requests/{token['armed_pr_id']}",
                         headers=_pisp_headers(),
                         timeout=5.0,
                     )
                     if r.status_code == 200:
-                        pr = r.json()
+                        pr = _normalise_pr(r.json())
                         token["armed_pr_status"] = pr.get("status", "")
                         token["armed_pr_amount"] = pr.get("amount")
                         token["armed_pr_reference"] = pr.get("reference", "")
@@ -512,26 +519,26 @@ async def ui_register_qr_token(
     expires_in_seconds: int = Form(300),
 ):
     """Register a new static QR token."""
-    # owner_uri must be the org-level requester URI — the PISP validates that
-    # the terminal's requester_uri (from the JWT) matches it.  Terminal-specific
-    # attribution happens via set_terminal on the PISP side when the payer scans.
-    payload = {
-        "requester_uri": REQUESTER_URI,
-        "terminal_uri": _terminal_state.get("uri", ""),
-        "display_name": display_name,
-        "mode": mode,
-    }
     if mode == "template":
-        if amount_pounds is not None:
-            payload["amount"] = _make_fiat_amount(round(amount_pounds * 100))
-        if reference:
-            payload["reference"] = reference
-        if description:
-            payload["description"] = description
-        payload["expires_in_seconds"] = expires_in_seconds
+        amount_pence_val = round(amount_pounds * 100) if amount_pounds is not None else 0
+        payload = {
+            "display_name": display_name,
+            "amount_pence": amount_pence_val,
+            "currency": "GBP",
+            "reference": reference or "",
+            "description": description or None,
+            "expires_in_seconds": expires_in_seconds,
+        }
+        profile_url = f"{PISP_URL}/requester/template/tokens"
+    else:  # armed
+        payload = {
+            "display_name": display_name,
+            "expires_in_seconds": expires_in_seconds,
+        }
+        profile_url = f"{PISP_URL}/requester/armed/tokens"
 
     async with httpx.AsyncClient() as client:
-        resp = await client.post(f"{PISP_URL}/requester/requests", json=payload, headers=_pisp_headers(), timeout=10.0)
+        resp = await client.post(profile_url, json=payload, headers=_pisp_headers(), timeout=10.0)
 
     if resp.status_code != 200:
         return templates.TemplateResponse(
@@ -547,14 +554,13 @@ async def ui_register_qr_token(
         )
 
     token = resp.json()
-    # Normalise template tokens so the Jinja2 template can find amount/reference
-    # under t.template (same shape as the GET /requester/qr-tokens restore path).
-    if token.get("mode") == "template":
+    token["mode"] = mode  # profile endpoint doesn't echo mode; restore from form
+    if mode == "template":
         token.setdefault("template", {
-            "amount": token.get("amount"),
-            "reference": token.get("reference"),
-            "description": token.get("description"),
-            "expires_in_seconds": token.get("expires_in_seconds"),
+            "amount": _make_fiat_amount(round(amount_pounds * 100) if amount_pounds else 0),
+            "reference": reference,
+            "description": description,
+            "expires_in_seconds": expires_in_seconds,
         })
     qr_tokens_cache[token["token_id"]] = token
     return templates.TemplateResponse(
@@ -584,15 +590,17 @@ async def ui_rearm_qr_token(
     expires_in_seconds: int = Form(300),
 ):
     """Re-arm an armed QR token with a fresh payment amount."""
+    amount_pence_rearm = round(amount_pounds * 100)
     payload = {
-        "amount": _make_fiat_amount(round(amount_pounds * 100)),
+        "amount_pence": amount_pence_rearm,
+        "currency": "GBP",
         "reference": reference,
         "description": description or None,
         "expires_in_seconds": expires_in_seconds,
     }
     async with httpx.AsyncClient() as client:
         resp = await client.put(
-            f"{PISP_URL}/requester/requests/{token_id}/arm", json=payload, headers=_pisp_headers(), timeout=10.0
+            f"{PISP_URL}/requester/armed/tokens/{token_id}/arm", json=payload, headers=_pisp_headers(), timeout=10.0
         )
 
     if resp.status_code != 200:
@@ -609,9 +617,7 @@ async def ui_rearm_qr_token(
             status_code=resp.status_code,
         )
 
-    pr = resp.json()
-    # Update the cached token's armed_pr_id and add to active_requests so the
-    # history page shows the payment immediately (without waiting for a restart).
+    pr = _normalise_pr(resp.json())
     pr_id = pr.get("payment_request_id")
     if token_id in qr_tokens_cache:
         t = qr_tokens_cache[token_id]
@@ -643,9 +649,10 @@ async def ui_rearm_qr_token(
 )
 async def ui_revoke_qr_token(request: Request, token_id: str):
     """Revoke (disable) a QR token."""
+    _mode = qr_tokens_cache.get(token_id, {}).get("mode", "armed")
     async with httpx.AsyncClient() as client:
         resp = await client.delete(
-            f"{PISP_URL}/requester/requests/{token_id}", headers=_pisp_headers(), timeout=10.0
+            f"{PISP_URL}/requester/{_mode}/tokens/{token_id}", headers=_pisp_headers(), timeout=10.0
         )
 
     if resp.status_code not in (200, 404):
@@ -698,17 +705,16 @@ async def create_payment(body: NewPaymentBody):
     The terminal would display the QR code for the payer to scan.
     """
     payload = {
-        "mode": "once",
-        "requester_uri": REQUESTER_URI,
+        "amount_pence": body.amount_pence,
+        "currency": "GBP",
         "display_name": REQUESTER_DISPLAY_NAME,
-        "amount": _make_fiat_amount(body.amount_pence),
         "reference": body.reference,
         "description": body.description,
         "expires_in_seconds": body.expires_in_seconds,
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            f"{PISP_URL}/requester/requests",
+            f"{PISP_URL}/requester/terminal/requests",
             json=payload,
             headers=_pisp_headers(),
             timeout=10.0,
@@ -720,7 +726,7 @@ async def create_payment(body: NewPaymentBody):
             detail=f"PISP rejected payment request: {resp.text}"
         )
 
-    data = resp.json()
+    data = _normalise_pr(resp.json())
     active_requests[data["payment_request_id"]] = data
     log.info(
         "Payment request created: %s (%s)",
@@ -743,7 +749,7 @@ async def poll_payment(payment_request_id: str):
     """
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{PISP_URL}/requester/requests/{payment_request_id}",
+            f"{PISP_URL}/requester/terminal/requests/{payment_request_id}",
             headers=_pisp_headers(),
             timeout=10.0,
         )
@@ -751,7 +757,7 @@ async def poll_payment(payment_request_id: str):
     if resp.status_code == 404:
         raise HTTPException(status_code=404, detail="Payment request not found")
 
-    data = resp.json()
+    data = _normalise_pr(resp.json())
     log.info("Polled %s → %s", payment_request_id, data.get("status"))
     return data
 
@@ -768,7 +774,7 @@ async def cancel_payment(payment_request_id: str):
     """
     async with httpx.AsyncClient() as client:
         resp = await client.delete(
-            f"{PISP_URL}/requester/requests/{payment_request_id}",
+            f"{PISP_URL}/requester/terminal/requests/{payment_request_id}",
             headers=_pisp_headers(),
             timeout=10.0,
         )
@@ -800,7 +806,7 @@ async def wait_for_payment(payment_request_id: str, timeout_seconds: int = 60):
     while elapsed < timeout_seconds:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{PISP_URL}/requester/requests/{payment_request_id}",
+                f"{PISP_URL}/requester/terminal/requests/{payment_request_id}",
                 headers=_pisp_headers(),
                 timeout=10.0,
             )
