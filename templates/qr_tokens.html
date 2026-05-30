@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Static QR Tokens — PSP Terminal{% endblock %}
+{% block title %}QR Tokens — PSP Terminal{% endblock %}
 {% block nav_qr %}active{% endblock %}
 
 {% block content %}
@@ -14,11 +14,11 @@
 <!-- Register new token -->
 <div class="card">
   <div class="card-header">
-    <h1>Register Static QR Token</h1>
+    <h1>Register QR Token</h1>
   </div>
   <p class="subtitle" style="margin-bottom:20px;">
-    <strong>Armed (UC2):</strong> re-arm before each transaction — the printed QR never changes.<br>
-    <strong>Template (UC3):</strong> fixed amount printed on the QR; each scan auto-creates a fresh payment.
+    <strong>Armed:</strong> re-arm before each transaction — the printed QR never changes.<br>
+    <strong>Template:</strong> fixed amount printed on the QR; each scan auto-creates a fresh payment.
   </p>
 
   <form method="post" action="/ui/qr-tokens">
@@ -31,8 +31,8 @@
       <div class="input-group full">
         <label for="mode">Mode <span style="color:var(--danger);">*</span></label>
         <select id="mode" name="mode" onchange="toggleTemplateFields(this.value)">
-          <option value="armed">Armed (UC2) — re-arm before each use</option>
-          <option value="template">Template (UC3) — fixed amount, auto-instantiate</option>
+          <option value="armed">Armed — re-arm before each use</option>
+          <option value="template">Template — fixed amount, auto-instantiate</option>
         </select>
       </div>
 
@@ -82,7 +82,7 @@
       <col style="width:140px;">  <!-- Display name -->
       <col style="width:110px;">  <!-- Mode/status -->
       <col>                        <!-- Payment details — takes remaining space -->
-      <col style="width:90px;">   <!-- Copy QR -->
+      <col style="width:120px;">  <!-- QR / Copy -->
       <col style="width:140px;">  <!-- Actions -->
     </colgroup>
     <thead>
@@ -141,11 +141,14 @@
           {% endif %}
         </td>
 
-        <!-- Copy QR button — payload in data attr to avoid inline-JS escaping issues -->
-        <td>
+        <!-- QR toggle + Copy URI -->
+        <td style="white-space:nowrap;">
+          <button class="btn btn-ghost btn-sm" onclick="toggleQR('{{ t.token_id }}', '{{ t.uri | e }}')" id="qr-btn-{{ t.token_id }}">
+            Show QR
+          </button>
           <button class="btn btn-ghost btn-sm" data-qr="{{ t.uri }}"
-            onclick="var p=this.dataset.qr; copyText(p).then(()=>{ this.textContent='Copied!'; setTimeout(()=>this.textContent='Copy QR',1500); }).catch(()=>{ this.textContent='Error'; setTimeout(()=>this.textContent='Copy QR',1500); })">
-            Copy QR
+            onclick="var p=this.dataset.qr; copyText(p).then(()=>{ this.textContent='Copied!'; setTimeout(()=>this.textContent='Copy URI',1500); }).catch(()=>{ this.textContent='Error'; setTimeout(()=>this.textContent='Copy URI',1500); })">
+            Copy URI
           </button>
         </td>
 
@@ -192,6 +195,20 @@
           </div>
         </td>
       </tr>
+
+      <!-- QR expand row (hidden until "Show QR" is clicked) -->
+      <tr id="qr-row-{{ t.token_id }}" style="display:none; background:var(--surface-alt, #f8f9fa);">
+        <td colspan="6" style="padding:16px 20px;">
+          <div style="display:flex; align-items:flex-start; gap:20px; flex-wrap:wrap;">
+            <div id="qr-canvas-{{ t.token_id }}" style="flex-shrink:0; background:#fff; padding:8px; border-radius:6px; border:1px solid var(--border);"></div>
+            <div style="min-width:0;">
+              <p style="margin:0 0 8px; font-size:12px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Scan with payer app</p>
+              <code style="font-size:11px; word-break:break-all; color:var(--text);">{{ t.uri }}</code>
+            </div>
+          </div>
+        </td>
+      </tr>
+
       {% endfor %}
     </tbody>
   </table>
@@ -200,9 +217,25 @@
   {% endif %}
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
 function toggleTemplateFields(mode) {
   document.getElementById('template-fields').style.display = mode === 'template' ? '' : 'none';
+}
+
+function toggleQR(tokenId, uri) {
+  const row = document.getElementById('qr-row-' + tokenId);
+  const btn = document.getElementById('qr-btn-' + tokenId);
+  const isOpen = row.style.display !== 'none';
+  row.style.display = isOpen ? 'none' : '';
+  btn.textContent = isOpen ? 'Show QR' : 'Hide QR';
+  if (!isOpen) {
+    const container = document.getElementById('qr-canvas-' + tokenId);
+    // Only generate once
+    if (!container.hasChildNodes()) {
+      new QRCode(container, { text: uri, width: 180, height: 180, correctLevel: QRCode.CorrectLevel.M });
+    }
+  }
 }
 
 function toggleRearm(tokenId) {
