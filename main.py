@@ -144,7 +144,7 @@ def _make_fiat_amount(pence: int, asset_code: str = "GBP") -> dict:
     symbols = {"GBP": "£", "EUR": "€", "USD": "$"}
     symbol = symbols.get(asset_code, asset_code + " ")
     return {
-        "value":       pence,
+        "value":       str(pence),
         "asset_kind":  "fiat",
         "asset_code":  asset_code,
         "minor_units": 2,
@@ -167,7 +167,7 @@ def _normalise_pr(pr: dict) -> dict:
     if "amount_pence" in pr and "amount" not in pr:
         pr["amount"] = _make_fiat_amount(pr["amount_pence"], pr.get("currency", "GBP"))
     elif "amount" in pr and isinstance(pr["amount"], dict) and "amount_pence" not in pr:
-        pr["amount_pence"] = pr["amount"].get("value", 0)
+        pr["amount_pence"] = int(pr["amount"].get("value", 0))
         pr["currency"] = pr["amount"].get("asset_code", "GBP")
     return pr
 
